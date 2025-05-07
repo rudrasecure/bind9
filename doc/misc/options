@@ -149,7 +149,7 @@ options {
 	fstrm-set-output-queue-model ( mpsc | spsc ); // optional (only available if configured)
 	fstrm-set-output-queue-size <integer>; // optional (only available if configured)
 	fstrm-set-reopen-interval <duration>; // optional (only available if configured)
-	geoip-directory ( <quoted_string> | none );
+	geoip-directory ( <quoted_string> | none ); // optional (only available if configured)
 	hostname ( <quoted_string> | none );
 	http-listener-clients <integer>; // optional (only available if configured)
 	http-port <integer>; // optional (only available if configured)

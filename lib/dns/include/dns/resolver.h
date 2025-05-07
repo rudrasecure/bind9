@@ -642,3 +642,5 @@ dns_resolver_freefresp(dns_fetchresponse_t **frespp);
  * Requires:
  * \li	'frespp' is valid. No-op if *frespp == NULL
  */
+ void
+ dns_packet_hexdump(const char *msg, const isc_region_t *region); 

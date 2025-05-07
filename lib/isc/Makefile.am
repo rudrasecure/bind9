@@ -101,7 +101,8 @@ libisc_la_HEADERS =			\
 	include/isc/util.h		\
 	include/isc/uv.h		\
 	include/isc/xml.h		\
-	include/isc/work.h
+	include/isc/work.h		\
+	include/isc/filewatcher.h
 
 libisc_la_SOURCES =		\
 	$(libisc_la_HEADERS)	\
@@ -201,7 +202,8 @@ libisc_la_SOURCES =		\
 	utf8.c			\
 	uv.c			\
 	xml.c			\
-	work.c
+	work.c			\
+	filewatcher.c
 
 if USE_ISC_RWLOCK
 libisc_la_SOURCES +=		\

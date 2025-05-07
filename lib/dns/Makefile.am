@@ -254,7 +254,8 @@ libdns_la_SOURCES =			\
 	zone.c				\
 	zone_p.h			\
 	zoneverify.c			\
-	zt.c
+	zt.c				\
+	ovpn_ip_map.c
 
 if HAVE_GSSAPI
 libdns_la_SOURCES +=			\

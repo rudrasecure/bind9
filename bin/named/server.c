@@ -129,6 +129,11 @@
 #include <named/transportconf.h>
 #include <named/tsigconf.h>
 #include <named/zoneconf.h>
+
+#include <dns/ovpn_ip_map.h>
+#include <uv.h>
+#include <isc/filewatcher.h>
+
 #ifdef HAVE_LIBSCF
 #include <stdlib.h>
 
@@ -379,6 +384,11 @@ static const char *memprof_status_text[] = {
 	[MEMPROF_OFF] = "OFF",
 	[MEMPROF_ON] = "ON",
 };
+
+typedef struct {
+	named_server_t *server;
+    char *filename;
+} ovpn_file_watcher_data_t;
 
 /*
  * These zones should not leak onto the Internet.
@@ -7077,6 +7087,56 @@ pps_timer_tick(void *arg) {
 	oldrequests = requests;
 }
 
+
+
+static void
+ovpn_file_change_cb(void *arg, const char *filename, int events) {
+    named_server_t *server = (named_server_t *)arg;
+    isc_result_t result;
+    char cwd[1024];
+    uid_t uid = getuid();
+    gid_t gid = getgid();
+    
+    printf("Current user ID in file watcher callback: %d, group ID: %d\n", uid, gid);
+    
+    // Get current working directory for debugging
+    if (getcwd(cwd, sizeof(cwd)) != NULL) {
+        printf("Current working directory: %s\n", cwd);
+    } else {
+        printf("Failed to get current working directory\n");
+    }
+    
+    printf("File event callback triggered for: %s\n", filename);
+    printf("Target file we're watching: %s\n", server->ovpn_pub_map_filename);
+    
+    // Check if this is our target file or a related file (like a temp file)
+    if (strstr(filename, "inode_watcher.txt") != NULL && (events & ISC_FILEWATCHER_CHANGE)) {
+        printf("FILE WAS MODIFIED\n");
+        
+        // Check if the file exists before trying to parse it
+        FILE *test_file = fopen(server->ovpn_pub_map_filename, "r");
+        if (test_file != NULL) {
+            printf("File exists and can be opened: %s\n", server->ovpn_pub_map_filename);
+            fclose(test_file);
+        } else {
+            printf("File does not exist or cannot be opened: %s - %s\n", 
+                   server->ovpn_pub_map_filename, strerror(errno));
+        }
+        
+        // Parse the OVPN IP to public IP mapping file
+        result = dns_ovpn_ip_map_parse_file(server->ovpn_pub_map_filename);
+        if (result != ISC_R_SUCCESS) {
+            printf("Failed to parse OVPN IP mapping file: %s\n", server->ovpn_pub_map_filename);
+        } else {
+            printf("Successfully updated OVPN IP mapping from file: %s\n", server->ovpn_pub_map_filename);
+        }
+    }
+	// else {
+    //     printf("Event is not relevant to our target file\n");
+    // }
+}
+
+
 /*
  * Replace the current value of '*field', a dynamically allocated
  * string or NULL, with a dynamically allocated copy of the
@@ -9500,6 +9560,16 @@ run_server(void *arg) {
 	isc_timer_create(named_g_mainloop, pps_timer_tick, server,
 			 &server->pps_timer);
 
+	
+	/* Initialize the file watcher */
+    result = init_ovpn_file_watcher(server, named_g_mainloop);
+    if (result != ISC_R_SUCCESS) {
+        isc_log_write(NAMED_LOGCATEGORY_GENERAL,
+                     NAMED_LOGMODULE_SERVER, ISC_LOG_WARNING,
+                     "failed to initialize file watcher: %s",
+                     isc_result_totext(result));
+    }
+
 	CHECKFATAL(cfg_parser_create(named_g_mctx, &named_g_parser),
 		   "creating default configuration parser");
 
@@ -9847,6 +9917,7 @@ named_server_create(isc_mem_t *mctx, named_server_t **serverp) {
 		.dumpfile = isc_mem_strdup(mctx, "named_dump.db"),
 		.secrootsfile = isc_mem_strdup(mctx, "named.secroots"),
 		.recfile = isc_mem_strdup(mctx, "named.recursing"),
+		.ovpn_pub_map_filename = isc_mem_strdup(mctx, "/etc/bind/watch_inode/inode_watcher.txt"),
 	};
 
 	/* Initialize server data structures. */
@@ -9911,6 +9982,60 @@ named_server_create(isc_mem_t *mctx, named_server_t **serverp) {
 	*serverp = server;
 }
 
+// Initialize the file watcher
+isc_result_t
+init_ovpn_file_watcher(named_server_t *server, isc_loop_t *loop) {
+	isc_filewatcher_t *watcher = NULL;
+    isc_result_t result;
+    uid_t uid = getuid();
+    gid_t gid = getgid();
+    
+    printf("Current user ID before starting file watcher: %d, group ID: %d\n", uid, gid);
+    
+    // Parse the OVPN IP mapping file at startup
+    printf("Parsing OVPN IP mapping file at startup: %s\n", server->ovpn_pub_map_filename);
+    
+    // Check if the file exists before trying to parse it
+    FILE *test_file = fopen(server->ovpn_pub_map_filename, "r");
+    if (test_file != NULL) {
+        printf("File exists and can be opened: %s\n", server->ovpn_pub_map_filename);
+        fclose(test_file);
+        
+        // Parse the OVPN IP to public IP mapping file
+        result = dns_ovpn_ip_map_parse_file(server->ovpn_pub_map_filename);
+        if (result != ISC_R_SUCCESS) {
+            printf("Failed to parse OVPN IP mapping file at startup: %s - %s\n", 
+                   server->ovpn_pub_map_filename, strerror(errno));
+            // Continue even if parsing fails - we'll try again when the file changes
+        } else {
+            printf("Successfully loaded OVPN IP mapping from file at startup: %s\n", 
+                   server->ovpn_pub_map_filename);
+        }
+    } else {
+        printf("File does not exist or cannot be opened at startup: %s - %s\n", 
+               server->ovpn_pub_map_filename, strerror(errno));
+        // Continue even if the file doesn't exist - it might be created later
+    }
+    
+    // Set up the file watcher to detect future changes
+    result = isc_filewatcher_create(loop, ovpn_file_change_cb, server,
+                                  server->ovpn_pub_map_filename, &watcher);
+    if (result != ISC_R_SUCCESS) {
+        return result;
+    }
+    
+    result = isc_filewatcher_start(watcher);
+    if (result != ISC_R_SUCCESS) {
+        isc_filewatcher_destroy(&watcher);
+        return result;
+    }
+    
+    // Store the watcher in the server structure
+    server->ovpn_file_watcher = watcher;
+    
+    return ISC_R_SUCCESS;
+}
+
 void
 named_server_destroy(named_server_t **serverp) {
 	named_server_t *server = *serverp;
@@ -9936,6 +10061,7 @@ named_server_destroy(named_server_t **serverp) {
 	isc_mem_free(server->mctx, server->dumpfile);
 	isc_mem_free(server->mctx, server->secrootsfile);
 	isc_mem_free(server->mctx, server->recfile);
+	isc_mem_free(server->mctx, server->ovpn_pub_map_filename);
 
 	if (server->bindkeysfile != NULL) {
 		isc_mem_free(server->mctx, server->bindkeysfile);
@@ -9951,6 +10077,10 @@ named_server_destroy(named_server_t **serverp) {
 	if (server->zonemgr != NULL) {
 		dns_zonemgr_detach(&server->zonemgr);
 	}
+
+	if (server->ovpn_file_watcher != NULL) {
+        isc_filewatcher_destroy(&server->ovpn_file_watcher);
+    }
 
 	INSIST(ISC_LIST_EMPTY(server->kasplist));
 	INSIST(ISC_LIST_EMPTY(server->keystorelist));

@@ -17,6 +17,7 @@
 #include <inttypes.h>
 #include <stdbool.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include <isc/ascii.h>
 #include <isc/async.h>
@@ -30,6 +31,7 @@
 #include <isc/mutex.h>
 #include <isc/random.h>
 #include <isc/refcount.h>
+#include <isc/region.h>
 #include <isc/result.h>
 #include <isc/rwlock.h>
 #include <isc/siphash.h>
@@ -59,6 +61,7 @@
 #include <dns/nsec.h>
 #include <dns/nsec3.h>
 #include <dns/opcode.h>
+#include <dns/ovpn_ip_map.h>
 #include <dns/peer.h>
 #include <dns/rcode.h>
 #include <dns/rdata.h>
@@ -2252,6 +2255,56 @@ issecuredomain(dns_view_t *view, const dns_name_t *name, dns_rdatatype_t type,
 				       issecure);
 }
 
+void
+dns_packet_hexdump(const char *msg, const isc_region_t *region) {
+	const unsigned char *buf = region->base;
+	unsigned int length = region->length;
+	unsigned int i, j;
+
+	printf("DNS Packet Hexdump: %s (%u bytes @ %p)\n", msg, length, buf);
+
+	/* Print hex values in a single line */
+	printf("Hex: ");
+	for (i = 0; i < length; i++) {
+		printf("%02x ", buf[i]);
+	}
+	printf("\n\n");
+
+	/* Print detailed hexdump with offset, hex values, and ASCII
+	 * representation */
+	for (i = 0; i < length; i += 16) {
+		/* Print offset */
+		printf("%04x: ", i);
+
+		/* Print hex values */
+		for (j = 0; j < 16; j++) {
+			if (i + j < length) {
+				printf("%02x ", buf[i + j]);
+			} else {
+				printf("   ");
+			}
+
+			/* Add extra space after 8 bytes for readability */
+			if (j == 7) {
+				printf(" ");
+			}
+		}
+
+		/* Print ASCII representation */
+		printf(" | ");
+		for (j = 0; j < 16; j++) {
+			if (i + j < length) {
+				printf("%c",
+				       isprint(buf[i + j]) ? buf[i + j] : '.');
+			} else {
+				printf(" ");
+			}
+		}
+		printf("\n");
+	}
+	printf("\n");
+}
+
 static isc_result_t
 resquery_send(resquery_t *query) {
 	isc_result_t result;
@@ -2280,6 +2333,9 @@ resquery_send(resquery_t *query) {
 #endif /* HAVE_DNSTAP */
 
 	QTRACE("send");
+	
+	// Get the mapped public IP from the OVPN IP map if available
+	uint32_t public_ip = dns_ovpn_ip_map_get_public_ip(fctx->clientstr);
 
 	if (atomic_load_acquire(&res->exiting)) {
 		FCTXTRACE("resquery_send: resolver shutting down");
@@ -2487,6 +2543,74 @@ resquery_send(resquery_t *query) {
 				ednsopts[ednsopt].value = NULL;
 				ednsopt++;
 			}
+
+			/* Add ECS Client Subnet
+			 * No need to check if ECS was asked
+			 * since we are adding it unconditionally
+
+							+0 (MSB) +1 (LSB)
+				+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+			0: |                          OPTION-CODE |
+				+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+			2: |                         OPTION-LENGTH |
+				+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+			4: |                            FAMILY |
+				+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+			6: |     SOURCE PREFIX-LENGTH      |     SCOPE
+			PREFIX-LENGTH       |
+				+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+			8: |                           ADDRESS... /
+				+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
+
+			 */
+			if (public_ip != 0) {
+				INSIST(ednsopt < DNS_EDNSOPTIONS);
+				ednsopts[ednsopt].code = DNS_OPT_CLIENT_SUBNET;
+				/*
+				 *	Length will always be 7
+				 *	2 bytes for family
+				 *	2 bytes for prefix lengths
+				 *	3 bytes for address
+				 */
+				ednsopts[ednsopt].length = 7;
+
+				/*
+				 * value consists of family, source prefix
+				 * length, scope prefix length, and address
+				 */
+
+				/* Allocate memory for the ECS option value that will persist */
+				uint8_t *ecs_value = isc_mem_get(fctx->mctx, 7);
+				
+				/* Family: IPv4 (0x0001) */
+				ecs_value[0] = 0x00;
+				ecs_value[1] = 0x01;
+				
+				/* Source prefix length: 24 (0x18) */
+				ecs_value[2] = 0x18;
+				
+				/* Scope prefix length: 0 (0x00) */
+				ecs_value[3] = 0x00;
+
+				/* Address bytes (first 3 bytes of IP) */
+				/* Use the public IP from the OVPN IP mapping */
+				unsigned char *ip_bytes = (unsigned char *)&public_ip;
+				ecs_value[4] = ip_bytes[0];
+				ecs_value[5] = ip_bytes[1];
+				ecs_value[6] = ip_bytes[2];
+				
+				/* Debug output */
+				printf("Using mapped public IP for ECS: %d.%d.%d\n", 
+				       ip_bytes[0], ip_bytes[1], ip_bytes[2]);
+				printf("ECS data: %02x%02x %02x%02x %02x%02x%02x\n",
+				       ecs_value[0], ecs_value[1], ecs_value[2], ecs_value[3],
+				       ecs_value[4], ecs_value[5], ecs_value[6]);
+				
+				/* Assign the allocated memory to the EDNS option */
+				ednsopts[ednsopt].value = ecs_value;
+				ednsopt++;
+			}
+
 			if (sendcookie) {
 				INSIST(ednsopt < DNS_EDNSOPTIONS);
 				ednsopts[ednsopt].code = DNS_OPT_COOKIE;
@@ -2662,6 +2786,8 @@ resquery_send(resquery_t *query) {
 	dns_message_reset(fctx->qmessage, DNS_MESSAGE_INTENTRENDER);
 
 	isc_buffer_usedregion(&buffer, &r);
+	/* Debug: Dump the packet contents */
+	dns_packet_hexdump("DNS Query Packet", &r);
 
 	resquery_ref(query);
 	dns_dispatch_send(query->dispentry, &r);
@@ -7726,7 +7852,7 @@ resquery_response_continue(void *arg, isc_result_t result) {
 	/*
 	 * Clear cache bits.
 	 */
-	FCTX_ATTR_CLR(fctx, (FCTX_ATTR_WANTNCACHE | FCTX_ATTR_WANTCACHE));
+	FCTX_ATTR_CLR(fctx, FCTX_ATTR_WANTNCACHE | FCTX_ATTR_WANTCACHE);
 
 	/*
 	 * Did we get any answers?
@@ -9866,7 +9992,7 @@ dns_resolver_create(dns_view_t *view, isc_loopmgr_t *loopmgr, isc_nm_t *nm,
 		    dns_dispatch_t *dispatchv4, dns_dispatch_t *dispatchv6,
 		    dns_resolver_t **resp) {
 	dns_resolver_t *res = NULL;
-
+	printf("DNS RESOLVER CREATE\n");
 	/*
 	 * Create a resolver.
 	 */
@@ -9968,6 +10094,9 @@ prime_done(void *arg) {
 	isc_log_write(DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_RESOLVER, level,
 		      "resolver priming query complete: %s",
 		      isc_result_totext(resp->result));
+
+	isc_log_write(DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_RESOLVER, level,
+		      "LETS START: Log level %d", level);
 
 	LOCK(&res->primelock);
 	fetch = res->primefetch;
