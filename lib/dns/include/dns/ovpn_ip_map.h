@@ -18,6 +18,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <isc/types.h>
+#include <isc/rwlock.h>
 
 #undef EXTERN
 #undef INIT
@@ -47,6 +48,11 @@ typedef struct dns_ovpn_ip_map_entry {
  * Global hash map that can be accessed by resolver.c
  */
 EXTERN dns_ovpn_ip_map_entry_t dns_ovpn_ip_map[DNS_OVPN_IP_MAP_SIZE];
+
+/*
+ * Read-write lock to protect access to the hash map
+ */
+EXTERN isc_rwlock_t dns_ovpn_ip_map_rwlock;
 
 /*
  * Function to parse the OVPN IP to public IP mapping file and update the hash map

@@ -9622,6 +9622,8 @@ shutdown_server(void *arg) {
 		      ISC_LOG_INFO, "shutting down%s",
 		      flush ? ": flushing changes" : "");
 
+	isc_filewatcher_destroy(&server->ovpn_file_watcher);
+
 	cleanup_session_key(server, server->mctx);
 
 	if (named_g_aclconfctx != NULL) {
@@ -10038,6 +10040,7 @@ init_ovpn_file_watcher(named_server_t *server, isc_loop_t *loop) {
 
 void
 named_server_destroy(named_server_t **serverp) {
+	printf("NAMED_SERVER_DESTROY called\n");
 	named_server_t *server = *serverp;
 	REQUIRE(NAMED_SERVER_VALID(server));
 

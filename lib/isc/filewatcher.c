@@ -256,6 +256,7 @@ filewatcher_close_cb(uv_handle_t *handle) {
 
 void
 isc_filewatcher_destroy(isc_filewatcher_t **watcherp) {
+	printf("ISC_FILEWATCHER_DESTROY Called\n");
 	isc_filewatcher_t *watcher;
 
 	REQUIRE(watcherp != NULL && *watcherp != NULL);
