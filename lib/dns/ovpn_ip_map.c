@@ -28,10 +28,13 @@
 
 /* The global hash map is already defined by the header due to DNS_OVPN_IP_MAP_MAIN being defined */
 
-/* Initialize the hash map with zeros */
+/* Initialize the hash map with zeros and set up the rwlock */
 void
 dns_ovpn_ip_map_init(void) {
     memset(dns_ovpn_ip_map, 0, sizeof(dns_ovpn_ip_map));
+    
+    /* Initialize the read-write lock */
+    isc_rwlock_init(&dns_ovpn_ip_map_rwlock);
 }
 
 /*
@@ -72,15 +75,22 @@ parse_ip_address(const char *ip_str, uint32_t *ip) {
 
 /*
  * Insert an entry into the hash map
+ * Note: This function assumes the caller holds the write lock
  */
 static isc_result_t
 insert_entry(uint32_t ovpn_ip, uint32_t public_ip) {
     uint32_t index = hash_ip(ovpn_ip);
     uint32_t original_index = index;
     
-    // Linear probing to handle collisions
-    while (dns_ovpn_ip_map[index].is_valid && 
-           dns_ovpn_ip_map[index].ovpn_ip != ovpn_ip) {
+    // Find an empty slot or an existing entry with the same OVPN IP
+    while (dns_ovpn_ip_map[index].is_valid) {
+        // If entry with same OVPN IP already exists, update it
+        if (dns_ovpn_ip_map[index].ovpn_ip == ovpn_ip) {
+            dns_ovpn_ip_map[index].public_ip = public_ip;
+            return ISC_R_SUCCESS;
+        }
+        
+        // Linear probing: try the next slot
         index = (index + 1) % DNS_OVPN_IP_MAP_SIZE;
         
         // If we've gone through the entire table, it's full
@@ -89,7 +99,7 @@ insert_entry(uint32_t ovpn_ip, uint32_t public_ip) {
         }
     }
     
-    // Update existing entry or insert new one
+    // Insert the new entry
     dns_ovpn_ip_map[index].ovpn_ip = ovpn_ip;
     dns_ovpn_ip_map[index].public_ip = public_ip;
     dns_ovpn_ip_map[index].is_valid = true;
@@ -109,9 +119,6 @@ dns_ovpn_ip_map_parse_file(const char *filename) {
     int entries_processed = 0;
     isc_result_t result;
     
-    // Initialize the hash map
-    dns_ovpn_ip_map_init();
-    
     file = fopen(filename, "r");
     if (file == NULL) {
         printf("Failed to open OVPN IP mapping file: %s - %s\n", filename, strerror(errno));
@@ -120,19 +127,25 @@ dns_ovpn_ip_map_parse_file(const char *filename) {
     
     printf("Parsing OVPN IP mapping file: %s\n", filename);
     
+    /* Acquire write lock before modifying the hash map */
+    WRLOCK(&dns_ovpn_ip_map_rwlock);
+    
+    /* Clear the existing hash map */
+    memset(dns_ovpn_ip_map, 0, sizeof(dns_ovpn_ip_map));
+    
     while (fgets(line, sizeof(line), file) != NULL) {
-        // Skip empty lines and comments
+        /* Skip empty lines and comments */
         if (line[0] == '#' || line[0] == '\n' || line[0] == '\0') {
             continue;
         }
         
-        // Parse line in format: ovpn_ip,public_ip
+        /* Parse line in format: ovpn_ip,public_ip */
         if (sscanf(line, "%15[^,],%15s", ovpn_ip_str, public_ip_str) != 2) {
             printf("Invalid line format: %s", line);
             continue;
         }
         
-        // Convert IP strings to network byte order integers
+        /* Convert IP strings to network byte order integers */
         result = parse_ip_address(ovpn_ip_str, &ovpn_ip);
         if (result != ISC_R_SUCCESS) {
             printf("Invalid OVPN IP address: %s\n", ovpn_ip_str);
@@ -145,12 +158,13 @@ dns_ovpn_ip_map_parse_file(const char *filename) {
             continue;
         }
         
-        // Insert into hash map
+        /* Insert into hash map */
         result = insert_entry(ovpn_ip, public_ip);
         if (result != ISC_R_SUCCESS) {
             printf("Failed to insert entry: %s -> %s\n", ovpn_ip_str, public_ip_str);
             if (result == ISC_R_NOSPACE) {
                 printf("Hash map is full\n");
+                WRUNLOCK(&dns_ovpn_ip_map_rwlock);
                 fclose(file);
                 return result;
             }
@@ -159,6 +173,9 @@ dns_ovpn_ip_map_parse_file(const char *filename) {
         
         entries_processed++;
     }
+    
+    /* Release the write lock */
+    WRUNLOCK(&dns_ovpn_ip_map_rwlock);
     
     fclose(file);
     printf("Successfully processed %d OVPN IP mapping entries\n", entries_processed);
@@ -173,12 +190,17 @@ bool
 dns_ovpn_ip_map_lookup(uint32_t ovpn_ip, uint32_t *public_ip) {
     uint32_t index = hash_ip(ovpn_ip);
     uint32_t original_index = index;
+    bool found = false;
+    
+    /* Acquire read lock before accessing the hash map */
+    RDLOCK(&dns_ovpn_ip_map_rwlock);
     
     // Search for the entry using linear probing
     while (dns_ovpn_ip_map[index].is_valid) {
         if (dns_ovpn_ip_map[index].ovpn_ip == ovpn_ip) {
             *public_ip = dns_ovpn_ip_map[index].public_ip;
-            return true;
+            found = true;
+            break;
         }
         
         index = (index + 1) % DNS_OVPN_IP_MAP_SIZE;
@@ -189,7 +211,10 @@ dns_ovpn_ip_map_lookup(uint32_t ovpn_ip, uint32_t *public_ip) {
         }
     }
     
-    return false;
+    /* Release the read lock */
+    RDUNLOCK(&dns_ovpn_ip_map_rwlock);
+    
+    return found;
 }
 
 /*
@@ -227,6 +252,9 @@ dns_ovpn_ip_map_parse_ip_from_string(const char *ip_port_str, uint32_t *ip_addr)
 /*
  * Get the public IP address for a client string in the format "IP#PORT".
  * Returns the public IP in network byte order if found, or 0 if not found.
+ * 
+ * This function is thread-safe as it calls dns_ovpn_ip_map_lookup which handles
+ * proper locking of the hash map.
  */
 uint32_t
 dns_ovpn_ip_map_get_public_ip(const char *client_str) {
@@ -264,5 +292,11 @@ dns_ovpn_ip_map_get_public_ip(const char *client_str) {
  */
 void
 dns_ovpn_ip_map_clear(void) {
+    /* Acquire write lock before modifying the hash map */
+    WRLOCK(&dns_ovpn_ip_map_rwlock);
+    
     memset(dns_ovpn_ip_map, 0, sizeof(dns_ovpn_ip_map));
+    
+    /* Release the write lock */
+    WRUNLOCK(&dns_ovpn_ip_map_rwlock);
 }
