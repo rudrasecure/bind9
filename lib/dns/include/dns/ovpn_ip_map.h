@@ -19,6 +19,7 @@
 #include <stdbool.h>
 #include <isc/types.h>
 #include <isc/rwlock.h>
+#include <isc/hashmap.h>
 
 #undef EXTERN
 #undef INIT
@@ -31,23 +32,22 @@
 #endif /* ifdef DNS_OVPN_IP_MAP_MAIN */
 
 /*
- * Maximum number of entries in the OVPN IP to public IP mapping table
- */
-#define DNS_OVPN_IP_MAP_SIZE 4096
-
-/*
  * Structure to hold an OVPN IP to public IP mapping entry
  */
 typedef struct dns_ovpn_ip_map_entry {
     uint32_t ovpn_ip;         /* OVPN IP address in network byte order */
     uint32_t public_ip;       /* Public IP address in network byte order */
-    bool is_valid;            /* Whether this entry is valid */
 } dns_ovpn_ip_map_entry_t;
 
 /*
  * Global hash map that can be accessed by resolver.c
  */
-EXTERN dns_ovpn_ip_map_entry_t dns_ovpn_ip_map[DNS_OVPN_IP_MAP_SIZE];
+EXTERN isc_hashmap_t *dns_ovpn_ip_map;
+
+/*
+ * Memory context for the hash map
+ */
+EXTERN isc_mem_t *dns_ovpn_ip_map_mctx;
 
 /*
  * Read-write lock to protect access to the hash map
@@ -87,6 +87,11 @@ void dns_ovpn_ip_map_init(void);
  * Function to clear the hash map
  */
 void dns_ovpn_ip_map_clear(void);
+
+/*
+ * Function to clean up the hash map and free all resources
+ */
+void dns_ovpn_ip_map_cleanup(void);
 
 #undef EXTERN
 #undef INIT
