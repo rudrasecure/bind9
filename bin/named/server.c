@@ -9901,7 +9901,7 @@ named_server_create(isc_mem_t *mctx, named_server_t **serverp) {
 		.dumpfile = isc_mem_strdup(mctx, "named_dump.db"),
 		.secrootsfile = isc_mem_strdup(mctx, "named.secroots"),
 		.recfile = isc_mem_strdup(mctx, "named.recursing"),
-		.ovpn_pub_map_filename = isc_mem_strdup(mctx, "/etc/bind/watch_inode/inode_watcher.txt"),
+		.ovpn_pub_map_filename = isc_mem_strdup(mctx, "/etc/bind/ovpn_map/ovpn_public_ip.txt"),
 	};
 
 	/* Initialize server data structures. */
