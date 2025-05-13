@@ -37,3 +37,6 @@ isc_filewatcher_stop(isc_filewatcher_t *watcher);
 
 void
 isc_filewatcher_destroy(isc_filewatcher_t **watcherp);
+
+const char *
+isc_filewatcher_get_basename(isc_filewatcher_t *watcher);

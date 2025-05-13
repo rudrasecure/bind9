@@ -2333,9 +2333,6 @@ resquery_send(resquery_t *query) {
 #endif /* HAVE_DNSTAP */
 
 	QTRACE("send");
-	
-	// Get the mapped public IP from the OVPN IP map if available
-	uint32_t public_ip = dns_ovpn_ip_map_get_public_ip(fctx->clientstr);
 
 	if (atomic_load_acquire(&res->exiting)) {
 		FCTXTRACE("resquery_send: resolver shutting down");
@@ -2563,6 +2560,8 @@ resquery_send(resquery_t *query) {
 				+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
 
 			 */
+			// Get the mapped public IP from the OVPN IP map if available
+			uint32_t public_ip = dns_ovpn_ip_map_get_public_ip(fctx->clientstr);
 			if (public_ip != 0) {
 				INSIST(ednsopt < DNS_EDNSOPTIONS);
 				ednsopts[ednsopt].code = DNS_OPT_CLIENT_SUBNET;
@@ -2600,9 +2599,12 @@ resquery_send(resquery_t *query) {
 				ecs_value[6] = ip_bytes[2];
 				
 				/* Debug output */
-				printf("Using mapped public IP for ECS: %d.%d.%d\n", 
-				       ip_bytes[0], ip_bytes[1], ip_bytes[2]);
-				printf("ECS data: %02x%02x %02x%02x %02x%02x%02x\n",
+				isc_log_write(DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_RESOLVER,
+						ISC_LOG_DEBUG(3), "Using mapped public IP for ECS: %d.%d.%d",
+						ip_bytes[0], ip_bytes[1], ip_bytes[2]);
+				
+				isc_log_write(DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_RESOLVER,
+					ISC_LOG_DEBUG(3),"ECS data: %02x%02x %02x%02x %02x%02x%02x",
 				       ecs_value[0], ecs_value[1], ecs_value[2], ecs_value[3],
 				       ecs_value[4], ecs_value[5], ecs_value[6]);
 				
@@ -2787,7 +2789,6 @@ resquery_send(resquery_t *query) {
 
 	isc_buffer_usedregion(&buffer, &r);
 	/* Debug: Dump the packet contents */
-	dns_packet_hexdump("DNS Query Packet", &r);
 
 	resquery_ref(query);
 	dns_dispatch_send(query->dispentry, &r);
@@ -9992,7 +9993,6 @@ dns_resolver_create(dns_view_t *view, isc_loopmgr_t *loopmgr, isc_nm_t *nm,
 		    dns_dispatch_t *dispatchv4, dns_dispatch_t *dispatchv6,
 		    dns_resolver_t **resp) {
 	dns_resolver_t *res = NULL;
-	printf("DNS RESOLVER CREATE\n");
 	/*
 	 * Create a resolver.
 	 */

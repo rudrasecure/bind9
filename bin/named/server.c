@@ -7093,42 +7093,24 @@ static void
 ovpn_file_change_cb(void *arg, const char *filename, int events) {
     named_server_t *server = (named_server_t *)arg;
     isc_result_t result;
-    char cwd[1024];
-    uid_t uid = getuid();
-    gid_t gid = getgid();
     
-    printf("Current user ID in file watcher callback: %d, group ID: %d\n", uid, gid);
-    
-    // Get current working directory for debugging
-    if (getcwd(cwd, sizeof(cwd)) != NULL) {
-        printf("Current working directory: %s\n", cwd);
-    } else {
-        printf("Failed to get current working directory\n");
-    }
-    
-    printf("File event callback triggered for: %s\n", filename);
-    printf("Target file we're watching: %s\n", server->ovpn_pub_map_filename);
-    
+	const char *expected_basename = isc_filewatcher_get_basename(server->ovpn_file_watcher);
+
     // Check if this is our target file or a related file (like a temp file)
-    if (strstr(filename, "inode_watcher.txt") != NULL && (events & ISC_FILEWATCHER_CHANGE)) {
-        printf("FILE WAS MODIFIED\n");
-        
-        // Check if the file exists before trying to parse it
-        FILE *test_file = fopen(server->ovpn_pub_map_filename, "r");
-        if (test_file != NULL) {
-            printf("File exists and can be opened: %s\n", server->ovpn_pub_map_filename);
-            fclose(test_file);
-        } else {
-            printf("File does not exist or cannot be opened: %s - %s\n", 
-                   server->ovpn_pub_map_filename, strerror(errno));
-        }
-        
+	if (strstr(filename, expected_basename) != NULL && (events & ISC_FILEWATCHER_CHANGE)) {
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_DEBUG(3),
+					"file %s was modified", expected_basename);
+
         // Parse the OVPN IP to public IP mapping file
         result = dns_ovpn_ip_map_parse_file(server->ovpn_pub_map_filename);
         if (result != ISC_R_SUCCESS) {
-            printf("Failed to parse OVPN IP mapping file: %s\n", server->ovpn_pub_map_filename);
+			isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
+						"failed to parse OVPN IP mapping file: %s - %s",
+				    server->ovpn_pub_map_filename, strerror(errno));
         } else {
-            printf("Successfully updated OVPN IP mapping from file: %s\n", server->ovpn_pub_map_filename);
+			isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_DEBUG(3),
+						"successfully updated OVPN IP mapping from file: %s",
+				    server->ovpn_pub_map_filename);
         }
     }
 	// else {
@@ -9989,35 +9971,27 @@ isc_result_t
 init_ovpn_file_watcher(named_server_t *server, isc_loop_t *loop) {
 	isc_filewatcher_t *watcher = NULL;
     isc_result_t result;
-    uid_t uid = getuid();
-    gid_t gid = getgid();
-    
-    printf("Current user ID before starting file watcher: %d, group ID: %d\n", uid, gid);
     
     // Parse the OVPN IP mapping file at startup
-    printf("Parsing OVPN IP mapping file at startup: %s\n", server->ovpn_pub_map_filename);
-    
-    // Check if the file exists before trying to parse it
-    FILE *test_file = fopen(server->ovpn_pub_map_filename, "r");
-    if (test_file != NULL) {
-        printf("File exists and can be opened: %s\n", server->ovpn_pub_map_filename);
-        fclose(test_file);
-        
-        // Parse the OVPN IP to public IP mapping file
-        result = dns_ovpn_ip_map_parse_file(server->ovpn_pub_map_filename);
-        if (result != ISC_R_SUCCESS) {
-            printf("Failed to parse OVPN IP mapping file at startup: %s - %s\n", 
-                   server->ovpn_pub_map_filename, strerror(errno));
-            // Continue even if parsing fails - we'll try again when the file changes
-        } else {
-            printf("Successfully loaded OVPN IP mapping from file at startup: %s\n", 
-                   server->ovpn_pub_map_filename);
-        }
-    } else {
-        printf("File does not exist or cannot be opened at startup: %s - %s\n", 
-               server->ovpn_pub_map_filename, strerror(errno));
-        // Continue even if the file doesn't exist - it might be created later
-    }
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_INFO,
+					"parsing OVPN IP mapping file at startup: '%s'",
+				    server->ovpn_pub_map_filename
+				);
+
+    // Parse the OVPN IP to public IP mapping file
+	result = dns_ovpn_ip_map_parse_file(server->ovpn_pub_map_filename);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
+					"Failed to parse OVPN IP mapping file at startup: '%s' - %s",
+				    server->ovpn_pub_map_filename, strerror(errno)
+				);
+		// Continue even if parsing fails - we'll try again when the file changes
+	} else {
+		isc_log_write(	NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_INFO,
+					"Successfully loaded OVPN IP mapping from file at startup: '%s'",
+				    server->ovpn_pub_map_filename
+				);
+	}
     
     // Set up the file watcher to detect future changes
     result = isc_filewatcher_create(loop, ovpn_file_change_cb, server,
@@ -10040,7 +10014,6 @@ init_ovpn_file_watcher(named_server_t *server, isc_loop_t *loop) {
 
 void
 named_server_destroy(named_server_t **serverp) {
-	printf("NAMED_SERVER_DESTROY called\n");
 	named_server_t *server = *serverp;
 	REQUIRE(NAMED_SERVER_VALID(server));
 

@@ -26,6 +26,7 @@
 #include <isc/util.h>
 #include <isc/mem.h>
 #include <isc/hashmap.h>
+#include <isc/log.h>
 #include <dns/ovpn_ip_map.h>
 
 /* The global hash map is already defined by the header due to DNS_OVPN_IP_MAP_MAIN being defined */
@@ -130,11 +131,17 @@ dns_ovpn_ip_map_parse_file(const char *filename) {
     
     file = fopen(filename, "r");
     if (file == NULL) {
-        printf("Failed to open OVPN IP mapping file: %s - %s\n", filename, strerror(errno));
+        isc_log_write(ISC_LOGCATEGORY_GENERAL, ISC_LOGMODULE_OTHER, ISC_LOG_ERROR,
+					"failed to parse OVPN IP mapping file at startup: '%s' - %s",
+				    filename, strerror(errno)
+				);
         return ISC_R_FILENOTFOUND;
     }
     
-    printf("Parsing OVPN IP mapping file: %s\n", filename);
+    isc_log_write(ISC_LOGCATEGORY_GENERAL, ISC_LOGMODULE_OTHER, ISC_LOG_INFO,
+					"parsing OVPN IP mapping file: '%s'",
+				    filename
+				);
     
     /* Acquire write lock before modifying the hash map */
     WRLOCK(&dns_ovpn_ip_map_rwlock);
@@ -162,29 +169,42 @@ dns_ovpn_ip_map_parse_file(const char *filename) {
         
         /* Parse line in format: ovpn_ip,public_ip */
         if (sscanf(line, "%15[^,],%15s", ovpn_ip_str, public_ip_str) != 2) {
-            printf("Invalid line format: %s", line);
+            isc_log_write(ISC_LOGCATEGORY_GENERAL, ISC_LOGMODULE_OTHER, ISC_LOG_ERROR,
+						"invalid line format: '%s'",
+						line
+					);
             continue;
         }
         
         /* Convert IP strings to network byte order integers */
         result = parse_ip_address(ovpn_ip_str, &ovpn_ip);
         if (result != ISC_R_SUCCESS) {
-            printf("Invalid OVPN IP address: %s\n", ovpn_ip_str);
+            isc_log_write(ISC_LOGCATEGORY_GENERAL, ISC_LOGMODULE_OTHER, ISC_LOG_ERROR,
+						"invalid OVPN IP address: '%s'",
+						ovpn_ip_str
+					);
             continue;
         }
         
         result = parse_ip_address(public_ip_str, &public_ip);
         if (result != ISC_R_SUCCESS) {
-            printf("Invalid public IP address: %s\n", public_ip_str);
+            isc_log_write(ISC_LOGCATEGORY_GENERAL, ISC_LOGMODULE_OTHER, ISC_LOG_ERROR,
+						"invalid public IP address: '%s'",
+						public_ip_str
+					);
             continue;
         }
         
         /* Insert into hash map */
         result = insert_entry(ovpn_ip, public_ip);
         if (result != ISC_R_SUCCESS) {
-            printf("Failed to insert entry: %s -> %s\n", ovpn_ip_str, public_ip_str);
+            isc_log_write(ISC_LOGCATEGORY_GENERAL, ISC_LOGMODULE_OTHER, ISC_LOG_ERROR,
+						"failed to insert entry: '%s' -> '%s'",
+						ovpn_ip_str, public_ip_str
+					);
             if (result == ISC_R_NOSPACE) {
-                printf("Hash map is full\n");
+                isc_log_write(ISC_LOGCATEGORY_GENERAL, ISC_LOGMODULE_OTHER, ISC_LOG_ERROR,
+						"hash map is full");
                 WRUNLOCK(&dns_ovpn_ip_map_rwlock);
                 fclose(file);
                 return result;
@@ -199,7 +219,9 @@ dns_ovpn_ip_map_parse_file(const char *filename) {
     WRUNLOCK(&dns_ovpn_ip_map_rwlock);
     
     fclose(file);
-    printf("Successfully processed %d OVPN IP mapping entries\n", entries_processed);
+    
+    isc_log_write(ISC_LOGCATEGORY_GENERAL, ISC_LOGMODULE_OTHER, ISC_LOG_INFO,
+				"successfully processed %d OVPN IP mapping entries", entries_processed);
     
     return ISC_R_SUCCESS;
 }
@@ -289,13 +311,21 @@ dns_ovpn_ip_map_get_public_ip(const char *client_str) {
         // Look up the client IP in the OVPN IP map
         if (dns_ovpn_ip_map_lookup(client_ip, &public_ip)) {
             inet_ntop(AF_INET, &public_ip, public_ip_str, sizeof(public_ip_str));
-            printf("OVPN IP %s mapped to public IP %s\n", client_ip_str, public_ip_str);
+            isc_log_write(DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_RESOLVER,
+                ISC_LOG_DEBUG(3), "mapped OVPN IP %s to public IP %s",
+                client_ip_str, public_ip_str);
             return public_ip;
         } else {
-            printf("No mapping found for OVPN IP %s\n", client_ip_str);
+            isc_log_write(DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_RESOLVER,
+                ISC_LOG_DEBUG(3), "no mapping found for OVPN IP %s",
+                client_ip_str);
+            return 0;
         }
     } else {
-        printf("Failed to parse client IP from string: %s\n", client_str);
+        isc_log_write(DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_RESOLVER,
+                ISC_LOG_ERROR, "failed to parse client IP from string: %s",
+            client_str);
+        return 0;
     }
     
     return 0;
