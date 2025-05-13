@@ -338,7 +338,6 @@ static void
 free_all_entries(void) {
     isc_hashmap_iter_t *iter = NULL;
     isc_result_t result;
-    void *value = NULL;
     
     /* Check if the hashmap is initialized */
     if (dns_ovpn_ip_map == NULL) {
@@ -351,6 +350,7 @@ free_all_entries(void) {
          result == ISC_R_SUCCESS;
          result = isc_hashmap_iter_next(iter))
     {
+        void *value = NULL;  // Initialize value to NULL for each iteration
         isc_hashmap_iter_current(iter, &value);
         if (value != NULL) {
             dns_ovpn_ip_map_entry_t *entry = (dns_ovpn_ip_map_entry_t *)value;
