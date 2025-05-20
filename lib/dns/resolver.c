@@ -62,6 +62,7 @@
 #include <dns/nsec3.h>
 #include <dns/opcode.h>
 #include <dns/ovpn_ip_map.h>
+#include <dns/skip_ecs_domains.h>
 #include <dns/peer.h>
 #include <dns/rcode.h>
 #include <dns/rdata.h>
@@ -2560,9 +2561,13 @@ resquery_send(resquery_t *query) {
 				+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+---+
 
 			 */
+			/* Check if we should skip ECS for this domain */
+			char namebuf[DNS_NAME_FORMATSIZE];
+			dns_name_format(fctx->name, namebuf, sizeof(namebuf));
+			bool skip_ecs = dns_skip_ecs_domains_check(namebuf);
 			// Get the mapped public IP from the OVPN IP map if available
 			uint32_t public_ip = dns_ovpn_ip_map_get_public_ip(fctx->clientstr);
-			if (public_ip != 0) {
+			if (public_ip != 0 && !skip_ecs) {
 				INSIST(ednsopt < DNS_EDNSOPTIONS);
 				ednsopts[ednsopt].code = DNS_OPT_CLIENT_SUBNET;
 				/*
@@ -2611,6 +2616,9 @@ resquery_send(resquery_t *query) {
 				/* Assign the allocated memory to the EDNS option */
 				ednsopts[ednsopt].value = ecs_value;
 				ednsopt++;
+			} else if (skip_ecs && public_ip != 0) {
+				isc_log_write(DNS_LOGCATEGORY_RESOLVER, DNS_LOGMODULE_RESOLVER,
+						ISC_LOG_DEBUG(1), "Skipping ECS for domain: %s", namebuf);
 			}
 
 			if (sendcookie) {
