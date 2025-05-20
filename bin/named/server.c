@@ -131,6 +131,7 @@
 #include <named/zoneconf.h>
 
 #include <dns/ovpn_ip_map.h>
+#include <dns/skip_ecs_domains.h>
 #include <uv.h>
 #include <isc/filewatcher.h>
 
@@ -7090,6 +7091,32 @@ pps_timer_tick(void *arg) {
 
 
 static void
+skip_ecs_domains_file_change_cb(void *arg, const char *filename, int events) {
+    named_server_t *server = (named_server_t *)arg;
+    bool result;
+    
+    const char *expected_basename = isc_filewatcher_get_basename(server->skip_ecs_domains_file_watcher);
+
+    // Check if this is our target file or a related file (like a temp file)
+    if (strstr(filename, expected_basename) != NULL && (events & ISC_FILEWATCHER_CHANGE)) {
+        isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_DEBUG(3),
+                    "file %s was modified", expected_basename);
+
+        // Parse the skip ECS domains file
+        result = dns_skip_ecs_domains_parse_file(server->skip_ecs_domains_filename);
+        if (!result) {
+            isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
+                        "failed to parse skip ECS domains file: %s - %s",
+                    server->skip_ecs_domains_filename, strerror(errno));
+        } else {
+            isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_DEBUG(3),
+                        "successfully updated skip ECS domains from file: %s",
+                    server->skip_ecs_domains_filename);
+        }
+    }
+}
+
+static void
 ovpn_file_change_cb(void *arg, const char *filename, int events) {
     named_server_t *server = (named_server_t *)arg;
     isc_result_t result;
@@ -9545,12 +9572,17 @@ run_server(void *arg) {
 	
 	/* Initialize the file watcher */
     result = init_ovpn_file_watcher(server, named_g_mainloop);
-    if (result != ISC_R_SUCCESS) {
-        isc_log_write(NAMED_LOGCATEGORY_GENERAL,
-                     NAMED_LOGMODULE_SERVER, ISC_LOG_WARNING,
-                     "failed to initialize file watcher: %s",
-                     isc_result_totext(result));
-    }
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+				ISC_LOG_ERROR, "failed to initialize OVPN file watcher");
+	}
+
+	// Initialize the skip ECS domains file watcher
+	result = init_skip_ecs_domains_file_watcher(server, named_g_mainloop);
+	if (result != ISC_R_SUCCESS) {
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER,
+				ISC_LOG_ERROR, "failed to initialize skip ECS domains file watcher");
+	}
 
 	CHECKFATAL(cfg_parser_create(named_g_mctx, &named_g_parser),
 		   "creating default configuration parser");
@@ -9902,6 +9934,7 @@ named_server_create(isc_mem_t *mctx, named_server_t **serverp) {
 		.secrootsfile = isc_mem_strdup(mctx, "named.secroots"),
 		.recfile = isc_mem_strdup(mctx, "named.recursing"),
 		.ovpn_pub_map_filename = isc_mem_strdup(mctx, "/etc/bind/ovpn_map/ovpn_public_ip.txt"),
+		.skip_ecs_domains_filename = isc_mem_strdup(mctx, "/etc/bind/skip_ecs/skip_ecs_domains.txt"),
 	};
 
 	/* Initialize server data structures. */
@@ -10012,6 +10045,55 @@ init_ovpn_file_watcher(named_server_t *server, isc_loop_t *loop) {
     return ISC_R_SUCCESS;
 }
 
+// Initialize the skip ECS domains file watcher
+isc_result_t
+init_skip_ecs_domains_file_watcher(named_server_t *server, isc_loop_t *loop) {
+	isc_filewatcher_t *watcher = NULL;
+    isc_result_t result;
+    
+    // Initialize the skip ECS domains module
+    dns_skip_ecs_domains_init();
+    
+    // Parse the skip ECS domains file at startup
+	isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_INFO,
+				"parsing skip ECS domains file at startup: '%s'",
+			    server->skip_ecs_domains_filename
+			);
+
+    // Parse the skip ECS domains file
+	bool parse_result = dns_skip_ecs_domains_parse_file(server->skip_ecs_domains_filename);
+	if (!parse_result) {
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_ERROR,
+				"Failed to parse skip ECS domains file at startup: '%s' - %s",
+			    server->skip_ecs_domains_filename, strerror(errno)
+			);
+		// Continue even if parsing fails - we'll try again when the file changes
+	} else {
+		isc_log_write(NAMED_LOGCATEGORY_GENERAL, NAMED_LOGMODULE_SERVER, ISC_LOG_INFO,
+				"Successfully loaded skip ECS domains from file at startup: '%s'",
+			    server->skip_ecs_domains_filename
+			);
+	}
+    
+    // Set up the file watcher to detect future changes
+    result = isc_filewatcher_create(loop, skip_ecs_domains_file_change_cb, server,
+                                  server->skip_ecs_domains_filename, &watcher);
+    if (result != ISC_R_SUCCESS) {
+        return result;
+    }
+    
+    result = isc_filewatcher_start(watcher);
+    if (result != ISC_R_SUCCESS) {
+        isc_filewatcher_destroy(&watcher);
+        return result;
+    }
+    
+    // Store the watcher in the server structure
+    server->skip_ecs_domains_file_watcher = watcher;
+    
+    return ISC_R_SUCCESS;
+}
+
 void
 named_server_destroy(named_server_t **serverp) {
 	named_server_t *server = *serverp;
@@ -10056,6 +10138,11 @@ named_server_destroy(named_server_t **serverp) {
 
 	if (server->ovpn_file_watcher != NULL) {
         isc_filewatcher_destroy(&server->ovpn_file_watcher);
+    }
+
+	// Clean up the skip ECS domains file watcher
+	if (server->skip_ecs_domains_file_watcher != NULL) {
+        isc_filewatcher_destroy(&server->skip_ecs_domains_file_watcher);
     }
 
 	INSIST(ISC_LIST_EMPTY(server->kasplist));

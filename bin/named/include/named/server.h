@@ -98,6 +98,8 @@ struct named_server {
 	bool	       interface_auto;
 	unsigned char  secret[32]; /*%< Server Cookie Secret */
 	ns_cookiealg_t cookiealg;
+	char *ovpn_pub_map_filename; /*%< OVPN to public IP mapping file */
+	char *skip_ecs_domains_filename; /*%< Domains to skip ECS for */
 
 	dns_dtenv_t *dtenv; /*%< Dnstap environment */
 
@@ -107,8 +109,8 @@ struct named_server {
 	isc_signal_t *sighup;
 	isc_signal_t *sigusr1;
 
-	char *ovpn_pub_map_filename; /*%< OVPN IP to public IP map file name */
 	isc_filewatcher_t *ovpn_file_watcher; /*%< File watcher for OVPN map file */
+	isc_filewatcher_t *skip_ecs_domains_file_watcher; /*%< File watcher for skip ECS domains file */
 };
 
 #define NAMED_SERVER_MAGIC    ISC_MAGIC('S', 'V', 'E', 'R')
@@ -417,3 +419,6 @@ init_inotify_for_ovpn_pub_map(named_server_t *server);
 
 isc_result_t
 init_ovpn_file_watcher(named_server_t *server, isc_loop_t *loop);
+
+isc_result_t
+init_skip_ecs_domains_file_watcher(named_server_t *server, isc_loop_t *loop);
