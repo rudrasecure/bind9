@@ -601,12 +601,12 @@ printversion(bool verbose) {
 	 * Print default configuration paths.
 	 */
 	printf("default paths:\n");
-	printf("  named configuration:  %s\n", named_g_conffile);
-	printf("  rndc configuration:   %s\n", rndcconf);
-	printf("  nsupdate session key: %s\n", named_g_defaultsessionkeyfile);
-	printf("  named PID file:       %s\n", named_g_defaultpidfile);
-	printf("  openvpn public ip map file /etc/bind/ovpn_map/ovpn_public_ip.txt\n");
-	printf("  skip ecs domains file /etc/bind/ecs/skip_ecs_domains.txt\n");
+	printf("  named configuration:  		%s\n", named_g_conffile);
+	printf("  rndc configuration:   		%s\n", rndcconf);
+	printf("  nsupdate session key: 		%s\n", named_g_defaultsessionkeyfile);
+	printf("  named PID file:       		%s\n", named_g_defaultpidfile);
+	printf("  openvpn public ip map file:	 /etc/bind/ovpn_map/ovpn_public_ip.txt\n");
+	printf("  skip ecs domains file:		 /etc/bind/skip_ecs/skip_ecs_domains.txt\n");
 
 #if defined(HAVE_GEOIP2)
 #define RTC(x) RUNTIME_CHECK((x) == ISC_R_SUCCESS)
