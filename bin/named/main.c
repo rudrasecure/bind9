@@ -605,7 +605,9 @@ printversion(bool verbose) {
 	printf("  rndc configuration:   %s\n", rndcconf);
 	printf("  nsupdate session key: %s\n", named_g_defaultsessionkeyfile);
 	printf("  named PID file:       %s\n", named_g_defaultpidfile);
-	printf("  openvpn public ip map /etc/bind/ovpn_map/ovpn_public_ip.txt");
+	printf("  openvpn public ip map file /etc/bind/ovpn_map/ovpn_public_ip.txt\n");
+	printf("  skip ecs domains file /etc/bind/ecs/skip_ecs_domains.txt\n");
+
 #if defined(HAVE_GEOIP2)
 #define RTC(x) RUNTIME_CHECK((x) == ISC_R_SUCCESS)
 	isc_mem_t *mctx = NULL;
